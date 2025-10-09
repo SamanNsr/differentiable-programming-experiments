@@ -162,28 +162,6 @@ def init_cnn_params(rng):
 
     return params
 
-    def train_step(i, params):
-        images, labels = train_data[i]
-        images_np = images.numpy()
-        labels_np = labels.numpy()
-
-        images_jax = jnp.array(images_np)
-        labels_jax = jnp.array(labels_np)
-
-        images_jax = images_jax.astype(jnp.float32) / 255.0
-        labels_onehot = one_hot(labels_jax, num_classes=10)
-
-        new_params, loss_val = sgd_update(params, images_jax, labels_onehot, lr=0.001)
-        
-        # Print every 100 steps
-        jax.lax.cond(
-            i % 100 == 0,
-            lambda _: jax.debug.print("Step {i}, Loss: {loss}", i=i, loss=loss_val),
-            lambda _: None,
-            None
-        )
-        
-        return new_params
         
 if __name__ == "__main__":
     rng = jrandom.PRNGKey(0)
