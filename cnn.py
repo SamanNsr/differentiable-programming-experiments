@@ -1,13 +1,12 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import random as jrandom
 from jax import jit as jjit
 from jax import lax as jlax
 from jax import value_and_grad
 import tensorflow_datasets as tfds
 
-### the training loss stuck at 2.3, why?
-### because the weights are not initialized properly
 
 def make_datasets(batch_size):
     ds_builder = tfds.builder('mnist')
@@ -76,12 +75,17 @@ def max_pool(x, pool=(2, 2), stride=(2, 2)):
                               )
 
 # convert Conv layer to Dense layer
+
+
 def flatten(x):
     return x.reshape((x.shape[0], -1))
 
 # for the dense layer
+
+
 def linear(x, w, b):
     return x @ w.T + b
+
 
 def forward(params, x):
     w_conv1 = params['w_conv1']
@@ -94,12 +98,12 @@ def forward(params, x):
     # Conv1
     x = conv2d(x, w_conv1, b_conv1)
     x = relu(x)
-    x = max_pool(x, pool=(2,2), stride=(2,2))
+    x = max_pool(x, pool=(2, 2), stride=(2, 2))
 
     # Conv2
     x = conv2d(x, w_conv2, b_conv2)
     x = relu(x)
-    x = max_pool(x, pool=(2,2), stride=(2,2))
+    x = max_pool(x, pool=(2, 2), stride=(2, 2))
 
     # Dense
     x = flatten(x)
@@ -107,13 +111,15 @@ def forward(params, x):
 
     return x
 
+
 def cross_entropy_loss(params, x, y_onehot):
     logits = forward(params, x)
-    log_probs = logits - jax.scipy.special.logsumexp(logits, axis=-1, keepdims=True)
+    log_probs = logits - \
+        jax.scipy.special.logsumexp(logits, axis=-1, keepdims=True)
     loss = -jnp.mean(jnp.sum(y_onehot * log_probs, axis=-1))
     return loss
 
-
+@jjit
 def sgd_update(params, x, y_onehot, lr=0.01):
     loss_val, grads = value_and_grad(cross_entropy_loss)(params, x, y_onehot)
     # manual param update (simple SGD)
@@ -123,37 +129,79 @@ def sgd_update(params, x, y_onehot, lr=0.01):
     return new_params, loss_val
 
 
-
 def one_hot(labels, num_classes=10):
     return jnp.eye(num_classes)[labels]
 
 
+def glorot_init(key, shape):
+    fan_in = np.prod(shape[1:]) if len(shape) > 1 else shape[0]
+    fan_out = shape[0] if len(shape) > 1 else shape[0]
+    limit = jnp.sqrt(6.0 / (fan_in + fan_out))
+    return jrandom.uniform(key, shape, minval=-limit, maxval=limit)
+
+
+def kaiming_init(key, shape):
+    fan_in = np.prod(shape[1:])
+    std = jnp.sqrt(2.0 / fan_in)
+    return std * jrandom.normal(key, shape)
+
+
+def init_cnn_params(rng):
+    k1, k2, k3, k4 = jrandom.split(rng, 4)
+
+    params = {}
+    params['w_conv1'] = kaiming_init(k1, (8, 1, 3, 3))
+    params['b_conv1'] = jnp.zeros((8,))
+
+    params['w_conv2'] = kaiming_init(k2, (16, 8, 3, 3))
+    params['b_conv2'] = jnp.zeros((16,))
+
+    flat_size = 16 * 7 * 7
+    params['w_dense'] = glorot_init(k3, (10, flat_size))   # 10 classes
+    params['b_dense'] = jnp.zeros((10,))
+
+    return params
+
+    def train_step(i, params):
+        images, labels = train_data[i]
+        images_np = images.numpy()
+        labels_np = labels.numpy()
+
+        images_jax = jnp.array(images_np)
+        labels_jax = jnp.array(labels_np)
+
+        images_jax = images_jax.astype(jnp.float32) / 255.0
+        labels_onehot = one_hot(labels_jax, num_classes=10)
+
+        new_params, loss_val = sgd_update(params, images_jax, labels_onehot, lr=0.001)
+        
+        # Print every 100 steps
+        jax.lax.cond(
+            i % 100 == 0,
+            lambda _: jax.debug.print("Step {i}, Loss: {loss}", i=i, loss=loss_val),
+            lambda _: None,
+            None
+        )
+        
+        return new_params
+        
 if __name__ == "__main__":
-    params = {
-        'w_conv1': jnp.ones((8, 1, 3, 3)),
-        'b_conv1': jnp.zeros((8,)),
-
-        'w_conv2': jnp.ones((16, 8, 3, 3)), 
-        'b_conv2': jnp.zeros((16,)),
-
-        'w_dense': jnp.ones((10, 7 * 7 * 16)),
-        'b_dense': jnp.zeros((10,)),
-    }
+    rng = jrandom.PRNGKey(0)
+    params = init_cnn_params(rng)
     train, test = make_datasets(batch_size=32)
 
-    for images, labels in train.take(100):
+    for i, (images, labels) in enumerate(train.take(2000)):
         images_np = images.numpy()  # TensorFlow → NumPy
         labels_np = labels.numpy()
-        
+
         images_jax = jnp.array(images_np)  # NumPy → JAX
         labels_jax = jnp.array(labels_np)
-        
+
         images_jax = images_jax.astype(jnp.float32) / 255.0
 
         labels_onehot = one_hot(labels_jax, num_classes=10)
 
-        new_params, loss_val = sgd_update(params, images_jax, labels_onehot, lr=0.01)
-        print("Loss:", loss_val)
-        
-
-    
+        params, loss_val = sgd_update(
+            params, images_jax, labels_onehot, lr=0.001)
+        if i % 100 == 0: 
+            print(f"Step {i}, Loss: {loss_val:.4f}")
